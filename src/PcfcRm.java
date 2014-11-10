@@ -226,7 +226,7 @@ class Player {
         Collections.sort(priorityMoves, new Comparator<Zone>() {
             @Override
             public int compare(Zone zone1, Zone zone2) {
-                return (zone1.getMyDensity() - zone2.getMyDensity()) *-1;
+                return (zone1.getMyDensity() - zone2.getMyDensity());
             }
         });
         return priorityMoves;
