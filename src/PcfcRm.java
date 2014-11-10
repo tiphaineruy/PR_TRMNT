@@ -156,7 +156,8 @@ class Player {
                         Movement.addMove(zone.getId(), priorities.get(0).getId(), moves);
                     }
                 }else{
-                    if (movingPods>options) movingPods -=1;
+                    movingPods -= zone.getPlatinum();
+//                    if (movingPods>options) movingPods -=1;
                     for (int i = 0; i < movingPods; i++) { // for each pod of the zone
                         if(options>0){
                             if(currentOption == options) currentOption = 0;
