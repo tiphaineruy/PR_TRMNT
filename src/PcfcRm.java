@@ -46,7 +46,7 @@ class Player {
         for (Zone zone : zones) {
             Integer value = 0;
             for (Zone adjacent : zone.getAdjacentZones())
-                    value += ((new Double(adjacent.getPlatinum()/2).intValue()));
+                value += ((new Double(adjacent.getPlatinum() / 2).intValue()));
 //                value += adjacent.getPlatinum(); // TODO TOUCHY
 
             zone.setAdjacentPlatinum(value);
@@ -133,6 +133,8 @@ class Player {
                     }
                     if (zone.getDefend() > 0) undefended.add(zone);
                 }
+
+
             }
 
             //SET_ORDERING_PATH (trail to move lone pods to frontiers)
@@ -212,10 +214,22 @@ class Player {
             dropTo.addAll(mines);
 
             // defensive drop
-            Collections.sort(undefended, Zone.platinumComparator);
+            Collections.sort(undefended, Zone.rawPlatinumComparator);
             if (undefended.size() > 0) {
                 while (!undefended.isEmpty() && maxPods > 0) {
                     Zone drop = undefended.get(0);
+
+                    if (drop.getDefend() > 0) { // DEFEND with in drop token
+                        if (drop.getMoveAblePods() > 0) {
+                            if (drop.getDefend() > 0) {
+                                int defended = Math.min(drop.getDefend(), drop.getMoveAblePods());
+                                drop.setDefend(drop.getDefend() - defended);
+                                drop.setMoveAblePods(drop.getMoveAblePods() - defended);
+                            }
+
+                        }
+                    }
+
                     if (drop.getDefend() > 0) {
                         maxPods = Movement.addDrop(drop, 1, drops, maxPods, undefended);
                     }
@@ -226,10 +240,10 @@ class Player {
             if (!dropTo.isEmpty()) {
                 //buy
                 Integer zoneToDropIndex = 0;
-                while (maxPods > 0 ) {
+                while (maxPods > 0) {
                     maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, maxPods, undefended);
                     zoneToDropIndex++;
-                    if(zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
+                    if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
                 }
             }
 
@@ -438,19 +452,19 @@ class Zone {
             }
         } else if (owner == -1) { // neutral
             value += platinum * 100;
-            value += 1300 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1);
+            value += 1000 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1);
             value += ownedAdjacentZones;
         } else { // enemy
             if (isEmpty()) {
-//                value += ownedAdjacentZones;
-                    value += platinum * 100 *(surroundingEnnemies>0?1:1); // TODO TOUCHY
-                    value += 1000 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1)*(surroundingEnnemies>0?1:1); //TODO TOUCHY
+                value += ownedAdjacentZones;
+                value += platinum * 100 * (surroundingEnnemies > 0 ? 1 : 1); // TODO TOUCHY
+                value += 1000 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1) * (surroundingEnnemies > 0 ? 1 : 1); //TODO TOUCHY
             } else {
                 value += platinum * 10;
             }
         }
 
-        if (movedTo>4) value =0;
+        if (movedTo > 4) value = 0;
 
         return value;
     }
@@ -534,7 +548,7 @@ class Zone {
 
     @Override
     public String toString() {
-        return "/Z:"+id +" MoveAble:"+moveAblePods+" Defend:"+defend+" Pods:"+podsOnZone()+" Value:"+getValue(myId).toString();
+        return "/Z:" + id + " MoveAble:" + moveAblePods + " Defend:" + defend + " Pods:" + podsOnZone() + " Value:" + getValue(myId).toString();
     }
 
     public static Comparator<Zone> valueComparator = new Comparator<Zone>() {
@@ -544,13 +558,21 @@ class Zone {
         }
     };
 
+    public static Comparator<Zone> rawPlatinumComparator = new Comparator<Zone>() {
+        @Override
+        public int compare(Zone zone1, Zone zone2) {
+            return (zone1.getPlatinum()- zone2.getPlatinum()) * -1;
+        }
+    };
+
+
     public static Comparator<Zone> platinumComparator = new Comparator<Zone>() {
         @Override
         public int compare(Zone zone1, Zone zone2) {  // sort lowest to highest if sortOrderForPlat >0
 //            if (zone1.getPlatinum().equals(zone2.getPlatinum())) {
 //                return (zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) * 1;
 //            } else {
-                return (zone1.getPlatinum() +zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() - zone2.getPlatinum()) * -1;
+            return (zone1.getPlatinum() + zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() - zone2.getPlatinum()) * -1;
 //            }
 
 //            return (zone1.getPlatinum() - zone2.getPlatinum() + (new Double((zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) / 2 )).intValue())* -1;
