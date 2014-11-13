@@ -46,23 +46,14 @@ class Player {
         for (Zone zone : zones) {
             Integer value = 0;
             for (Zone adjacent : zone.getAdjacentZones())
-                value += adjacent.getPlatinum();
+                value += ((new Double(adjacent.getPlatinum() / 2).intValue()));
+//                value += adjacent.getPlatinum(); // TODO TOUCHY
+
             zone.setAdjacentPlatinum(value);
         }
 
         // SORTING PLAT  allow for drop on low value + near clusters
-        final int sortOrderForPlat = 1;
-        Collections.sort(platinumZones, new Comparator<Zone>() {
-            @Override
-            public int compare(Zone zone1, Zone zone2) {  // sort lowest to highest if sortOrderForPlat >0
-                if (zone1.getPlatinum().equals(zone2.getPlatinum())) {
-                    return (zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) * -1;
-                } else {
-                    return (zone1.getPlatinum() - zone2.getPlatinum()) * sortOrderForPlat;
-                }
-
-            }
-        });
+        Collections.sort(platinumZones, Zone.platinumComparator);
 
         // GAME LOOP /////////////////////////////////////////
         while (true) {
@@ -71,8 +62,6 @@ class Player {
             currentOwnedPodsZones = new ArrayList<Zone>();
             int platinum = in.nextInt(); // my available Platinum
             int maxPods = (new Double(platinum / 20)).intValue();
-
-            System.err.println("PLAT:" + platinum + " MAX_PODS:" + maxPods);
 
             // UPDATE ZONES /////////////////////////////////////////
             in.nextLine();
@@ -99,6 +88,12 @@ class Player {
                 in.nextLine();
             }
 
+            Integer[] income = new Integer[]{0, 0, 0, 0};
+            for (Zone zone : zones) {
+                if (zone.getOwner() >= 0) income[zone.getOwner()] += zone.getPlatinum();
+            }
+            System.err.println("INCOME me:" + myId + "  // P0 " + income[0] + " P1 " + income[1] + " P2 " + income[2] + " P3 " + income[3]);
+
 
             // SECURE AND DEFEND /////////////////////////////////////
             List<Zone> unsecured = new ArrayList<Zone>();
@@ -113,19 +108,23 @@ class Player {
                         zone.setSecured(false);
                         zone.setOrderPath(0); // zone is border
                         if (adj.getOwner() != -1 && valuable) { // enemy && strategic value
-                            zone.setDefend(zone.getDefend() + zone.podsOnZone());
+                            zone.setDefend(Math.min(zone.getDefend() + adj.podsOnZone(), 4)); //TODO TOUCHY
                         }
+
                     } else if (adj.getOwner() == myId) {
                         zone.setOwnedAdjacentZones(zone.getOwnedAdjacentZones() + 1);
                     }
                 }
+                zone.setSurroundingEnnemies(zone.getDefend());
+
                 if (zone.getSecured())
                     secured.add(zone);
                 else
                     unsecured.add(zone);
+
                 if (zone.getDefend() > 0) { // DEFEND with in zone token
                     if (zone.getMoveAblePods() > 0) {
-                        if (zone.getDefend() < 0) {
+                        if (zone.getDefend() > 0) {
                             int defended = Math.min(zone.getDefend(), zone.getMoveAblePods());
                             zone.setDefend(zone.getDefend() - defended);
                             zone.setMoveAblePods(zone.getMoveAblePods() - defended);
@@ -134,6 +133,8 @@ class Player {
                     }
                     if (zone.getDefend() > 0) undefended.add(zone);
                 }
+
+
             }
 
             //SET_ORDERING_PATH (trail to move lone pods to frontiers)
@@ -155,8 +156,6 @@ class Player {
                 temp.removeAll(toRemove);
             }
 
-            date2 = new Date(); System.err.println("INIT END:"+(date2.getTime()-date1.getTime()));
-
             // MOVE /////////////////////////////////////////////
             Map<Movement, Integer> moves = new HashMap<Movement, Integer>();
             for (Zone zone : currentOwnedPodsZones) { // for each zone where I have pods
@@ -164,7 +163,7 @@ class Player {
 
                 //building pods move command
                 int movingPods = zone.getMoveAblePods();
-                if (zone.getSecured()) {
+                if (zone.getSecured()) { // THE ZONE IS SAFE
                     priorities = buildOrderPathMoveListForZone(zone.getAdjacentZones());
                     if (!priorities.isEmpty()) {
                         for (int i = 0; i < movingPods; i++) {
@@ -178,24 +177,19 @@ class Player {
                                 Collections.sort(border, Zone.valueComparator);
                                 Movement.addMove(zone, border.get(0), moves, undefended);
                             } else {
-                                Movement.addMove(zone, priorities.get(0), moves, undefended); //TODO remove get(0) and use priority system to defend zones
+                                Movement.addMove(zone, priorities.get(0), moves, undefended);
                             }
 
                         }
                     }
-                } else {
-                    priorities = buildPriorityMoveListForZone(zone);
-                    int options = priorities.size();
-                    int currentOption = 0;
+                } else {  // THE ZONE IS A BORDER
+                    priorities = zone.getAdjacentZones();
+//                    System.err.println("BEFORE MOVE:"+zone);
                     for (int i = 0; i < movingPods; i++) { // for each pod of the zone
-                        if (options > 0) {
-                            if (currentOption == options) currentOption = 0;
-                            if (currentOption < options) {
-                                Movement.addMove(zone, priorities.get(currentOption), moves, undefended);
-                                Collections.sort(priorities,Zone.valueComparator);
-                                currentOption += 1;
-                            }
-                        }
+                        Collections.sort(priorities, Zone.valueComparator);
+//                        System.err.println(zone);
+                        Movement.addMove(zone, priorities.get(0), moves, undefended);
+
                     }
                 }
             }
@@ -208,64 +202,57 @@ class Player {
                 }
                 System.out.println(moveOut.toString().trim());
             }
-            date2 = new Date(); System.err.println("MOVE END:"+(date2.getTime()-date1.getTime()));
 
 
-            int DROP_SIZE = 1;
-            Map<Integer,Integer> drops = new HashMap<Integer, Integer>();
+            int DROP_SIZE = 2;
+            Map<Integer, Integer> drops = new HashMap<Integer, Integer>();
             // BUY ////////////////////////////////////////////////
             List<Zone> dropTo = new ArrayList<Zone>();
             dropTo.addAll(Zone.getNeutralZones(platinumZones, null));
             List<Zone> mines = Zone.getOwnedZones(zones, myId, false);
             Collections.sort(mines, Zone.valueComparator);
             dropTo.addAll(mines);
-            date2 = new Date(); System.err.println("INIT drop end:"+(date2.getTime()-date1.getTime()));
 
             // defensive drop
-            System.err.println("undefended size"+undefended.size());
-           Collections.sort(undefended, Zone.valueComparator);
-            System.err.println("THAT SORT....");
-            if (undefended.size()>0){
-                while (!undefended.isEmpty() && maxPods>0 ){
+            Collections.sort(undefended, Zone.rawPlatinumComparator);
+            if (undefended.size() > 0) {
+                while (!undefended.isEmpty() && maxPods > 0) {
                     Zone drop = undefended.get(0);
-                    if (drop.getDefend()>0){
-                        maxPods -=1;
-                        if(drops.get(drop.getId())==null)
-                            drops.put(drop.getId(),1);
-                        else
-                            drops.put(drop.getId(), drops.get(drop.getId())+1);
-                        drop.setDefend(drop.getDefend()-1);
 
+                    if (drop.getDefend() > 0) { // DEFEND with in drop token
+                        if (drop.getMoveAblePods() > 0) {
+                            if (drop.getDefend() > 0) {
+                                int defended = Math.min(drop.getDefend(), drop.getMoveAblePods());
+                                drop.setDefend(drop.getDefend() - defended);
+                                drop.setMoveAblePods(drop.getMoveAblePods() - defended);
+                            }
+
+                        }
+                    }
+
+                    if (drop.getDefend() > 0) {
+                        maxPods = Movement.addDrop(drop, 1, drops, maxPods, undefended);
                     }
                     undefended.remove(drop);
                 }
             }
-            date2 = new Date(); System.err.println("defensive drop END:"+(date2.getTime()-date1.getTime()));
 
             if (!dropTo.isEmpty()) {
                 //buy
-                Integer currentDropSize = 0;
-                Integer currentPlatZone = 0;
-                for (int i = 0; i < maxPods; i++) {
-                    date2 = new Date(); System.err.println("plop:"+i+"//"+(date2.getTime()-date1.getTime()));
-                    currentDropSize += 1;
-                    if (currentDropSize == DROP_SIZE) {
-                        drops.put(dropTo.get(currentPlatZone).getId(),currentDropSize);
-                        currentDropSize = 0;
-                        if (currentPlatZone < dropTo.size() - 1) {
-                            currentPlatZone += 1;
-                        }
-
-                    }
+                Integer zoneToDropIndex = 0;
+                while (maxPods > 0) {
+                    maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, maxPods, undefended);
+                    zoneToDropIndex++;
+                    if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
                 }
-                if (currentDropSize < DROP_SIZE && currentDropSize > 0)
-                    drops.put(dropTo.get(currentPlatZone).getId(),currentDropSize);
             }
 
+            //  OUTPUT
             if (drops.isEmpty()) {
                 System.out.println("WAIT");
             } else {
                 StringBuilder buyOut = new StringBuilder();
+//                System.err.println("DROPS:"+drops);
                 for (Integer zoneId : drops.keySet()) {
                     buyOut.append(drops.get(zoneId) + " " + zoneId + " ");
                 }
@@ -273,20 +260,8 @@ class Player {
             }
 
 
-            date2 = new Date(); System.err.println("TIME:"+(date2.getTime()-date1.getTime()));
+//            date2 = new Date(); System.err.println("TIME:"+(date2.getTime()-date1.getTime()));
         }
-    }
-
-    public static List<Zone> buildPriorityMoveListForZone(final Zone zone) {
-        List<Zone> priorityMoves = new ArrayList<Zone>();
-        priorityMoves.addAll(Zone.getNotOwnedZones(zone.getAdjacentZones(), myId));
-        Collections.sort(priorityMoves, new Comparator<Zone>() {
-            @Override
-            public int compare(Zone zone1, Zone zone2) {
-                return (zone1.getValue(myId) - zone2.getValue(myId)) * -1;
-            }
-        });
-        return priorityMoves;
     }
 
     public static List<Zone> buildOrderPathMoveListForZone(final List<Zone> zones) {
@@ -323,9 +298,9 @@ class Movement {
         if (from.getMoveAblePods() <= 0) return; // not enough pod to complete move
         from.setMoveAblePods(from.getMoveAblePods() - 1); // --podNumber
         to.setMovedTo(to.getMovedTo() + 1); // ++ movedTo
-        if (to.getDefend() > 0){
+        if (to.getDefend() > 0) {
             to.setDefend(to.getDefend() - 1); // zone defended by +1 pods
-            if(to.getDefend() > 0) toDefend.remove(to);
+            if (to.getDefend() > 0) toDefend.remove(to);
         }
         addMove(new Integer(from.getId()), new Integer(to.getId()), moves);
     }
@@ -337,6 +312,20 @@ class Movement {
         } else {
             moves.put(new Movement(from, to), 1);
         }
+    }
+
+    public static Integer addDrop(Zone location, Integer size, Map<Integer, Integer> drops, Integer maxDrop, List<Zone> toDefend) {
+        int realDropSize = Math.min(size, maxDrop);
+        if (drops.get(location.getId()) == null)
+            drops.put(location.getId(), realDropSize);
+        else
+            drops.put(location.getId(), drops.get(location.getId()) + realDropSize);
+
+        if (location.getDefend() > 0) {
+            location.setDefend(location.getDefend() - realDropSize); // zone defended by +1 pods
+            if (location.getDefend() > 0) toDefend.remove(location);
+        }
+        return maxDrop - realDropSize;
     }
 
     @Override
@@ -375,6 +364,16 @@ class Zone {
     private Integer movedTo = 0; // number of pods that have moved this zone
     private Integer adjacentPlatinum = 0;
     private Integer ownedAdjacentZones = 0;
+
+    public Integer getSurroundingEnnemies() {
+        return surroundingEnnemies;
+    }
+
+    public void setSurroundingEnnemies(Integer surroundingEnnemies) {
+        this.surroundingEnnemies = surroundingEnnemies;
+    }
+
+    private Integer surroundingEnnemies = 0;
 
     public Integer getOwnedAdjacentZones() {
         return ownedAdjacentZones;
@@ -440,32 +439,32 @@ class Zone {
     //    this.myDensity = myDensity;
     //}
 
-    public int getEdges() {
-        return 6 - adjacentZones.size();
-    }
-
     public Integer getValue(int myId) {
         Integer value = 0;
 
         if (owner == myId) { // me
             if (!secured) {
                 value += platinum * 10;
-                if (defend>0){
-                    value+=10000;
+                if (defend > 0) {
+                    value += 10000;
                 }
 
             }
         } else if (owner == -1) { // neutral
             value += platinum * 100;
-            value += 1000;
+            value += 1000 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1);
+            value += ownedAdjacentZones;
         } else { // enemy
             if (isEmpty()) {
-                value += platinum * 100;
-                value += 1001;
+                value += ownedAdjacentZones;
+                value += platinum * 100 * (surroundingEnnemies > 0 ? 1 : 1); // TODO TOUCHY
+                value += 1000 * (movedTo > 0 ? (platinum > 0 ? 1 : 0) : 1) * (surroundingEnnemies > 0 ? 1 : 1); //TODO TOUCHY
             } else {
-
+                value += platinum * 10;
             }
         }
+
+        if (movedTo > 4) value = 0;
 
         return value;
     }
@@ -549,13 +548,34 @@ class Zone {
 
     @Override
     public String toString() {
-        return id + "";
+        return "/Z:" + id + " MoveAble:" + moveAblePods + " Defend:" + defend + " Pods:" + podsOnZone() + " Value:" + getValue(myId).toString();
     }
 
     public static Comparator<Zone> valueComparator = new Comparator<Zone>() {
         @Override
         public int compare(Zone zone1, Zone zone2) {
             return (zone1.getValue(myId) - zone2.getValue(myId)) * -1;
+        }
+    };
+
+    public static Comparator<Zone> rawPlatinumComparator = new Comparator<Zone>() {
+        @Override
+        public int compare(Zone zone1, Zone zone2) {
+            return (zone1.getPlatinum()- zone2.getPlatinum()) * -1;
+        }
+    };
+
+
+    public static Comparator<Zone> platinumComparator = new Comparator<Zone>() {
+        @Override
+        public int compare(Zone zone1, Zone zone2) {  // sort lowest to highest if sortOrderForPlat >0
+//            if (zone1.getPlatinum().equals(zone2.getPlatinum())) {
+//                return (zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) * 1;
+//            } else {
+            return (zone1.getPlatinum() + zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() - zone2.getPlatinum()) * -1;
+//            }
+
+//            return (zone1.getPlatinum() - zone2.getPlatinum() + (new Double((zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) / 2 )).intValue())* -1;
         }
     };
 }
