@@ -12,20 +12,416 @@ class Player {
 
         // INIT //////////////////////////////////////////////////
 
+        World world = new World();
+        MovementManager moveManager = new MovementManager(world);
+        DropManager dropManager = new DropManager(world);
+
         Scanner in = new Scanner(System.in);
-        int playerCount = in.nextInt(); // the amount of players (2 to 4)
-        myId = in.nextInt(); // my player ID (0, 1, 2 or 3)
-        Zone.myId = myId;
-        int zoneCount = in.nextInt(); // the amount of zones on the map
-        int linkCount = in.nextInt(); // the amount of links between all zones
+        world.setPlayerCount(in.nextInt()); // the amount of players (2 to 4)
+        world.setMyId(Zone.myId = myId = in.nextInt()); // my player ID (0, 1, 2 or 3)
+        world.setZoneCount(in.nextInt());// the amount of zones on the map
+        world.setLinkCount(in.nextInt()); // the amount of links between all zones
 
-        List<Zone> zones = new ArrayList<Zone>();
-        List<Zone> platinumZones = new ArrayList<Zone>();
-        List<Zone> currentOwnedPodsZones;
+        world.initWorld(in);
 
+
+        // GAME LOOP /////////////////////////////////////////
+        while (true) {
+/*            Date date1 = new Date();
+            Date date2 = new Date();*/
+            world.updateZones(in);
+/*            Integer[] income = new Integer[]{0, 0, 0, 0};
+            for (Zone zone : zones) {
+                if (zone.getOwner() >= 0) income[zone.getOwner()] += zone.getPlatinum();
+            }
+            System.err.println("INCOME me:" + myId + "  // P0 " + income[0] + " P1 " + income[1] + " P2 " + income[2] + " P3 " + income[3]);*/
+
+            world.secureAndDefend();
+            world.generateOrderPath();
+
+            // MOVE /////////////////////////////////////////////
+            System.out.println(moveManager.update().out());
+            // DROP ////////////////////////////////////////////
+            System.out.println(dropManager.update().out());
+//            date2 = new Date(); System.err.println("TIME:"+(date2.getTime()-date1.getTime()));
+        }
+    }
+
+}
+
+class DropManager {
+    private World world;
+
+    DropManager(World world) {
+        this.world = world;
+    }
+
+    Map<Integer, Integer> drops = new HashMap<Integer, Integer>();
+
+    public DropManager update() {
+        drops = new HashMap<Integer, Integer>();
+        // BUY ////////////////////////////////////////////////
+        List<Zone> dropTo = new ArrayList<Zone>();
+        dropTo.addAll(Zone.getNeutralZones(world.getPlatinumZones(), null));
+
+        List<Zone> mines = Zone.getOwnedZones(world.getZones(), world.getMyId(), false);
+        Collections.sort(mines, Zone.valueComparator);
+        dropTo.addAll(mines);
+
+        // defensive drop
+        Collections.sort(world.getUndefended(), Zone.rawPlatinumComparator);
+        if (world.getUndefended().size() > 0) {
+            while (!world.getUndefended().isEmpty() && world.getMaxPods() > 0) {
+                Zone drop = world.getUndefended().get(0);
+
+                if (drop.getDefend() > 0) { // DEFEND with in drop token
+                    if (drop.getMoveAblePods() > 0) {
+                        if (drop.getDefend() > 0) {
+                            int defended = Math.min(drop.getDefend(), drop.getMoveAblePods());
+                            drop.setDefend(drop.getDefend() - defended);
+                            drop.setMoveAblePods(drop.getMoveAblePods() - defended);
+                        }
+
+                    }
+                }
+
+                if (drop.getDefend() > 0) {
+                    world.setMaxPods(Movement.addDrop(drop, 1, drops, world.getMaxPods(), world.getUndefended()));
+                }
+                world.getUndefended().remove(drop);
+            }
+        }
+
+        if (!dropTo.isEmpty()) {
+            //buy
+            Integer zoneToDropIndex = 0;
+            while (world.getMaxPods() > 0) {
+                world.setMaxPods(Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, world.getMaxPods(), world.getUndefended()));
+                zoneToDropIndex++;
+                if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
+            }
+        }
+        return this;
+    }
+
+    public String out() {
+        //  OUTPUT
+        if (drops.isEmpty()) {
+            return "WAIT";
+        } else {
+            StringBuilder buyOut = new StringBuilder();
+//                System.err.println("DROPS:"+drops);
+            for (Integer zoneId : drops.keySet()) {
+                buyOut.append(drops.get(zoneId)).append(" ").append(zoneId).append(" ");
+            }
+            return buyOut.toString().trim();
+        }
+    }
+}
+
+class MovementManager {
+    private World world;
+
+    MovementManager(World world) {
+        this.world = world;
+    }
+
+    Map<Movement, Integer> moves = new HashMap<Movement, Integer>();
+
+    public MovementManager update() {
+        moves = new HashMap<Movement, Integer>();
+        for (Zone zone : world.getCurrentOwnedPodsZones()) { // for each zone where I have pods
+            List<Zone> priorities;
+
+            //building pods move command
+            int movingPods = zone.getMoveAblePods();
+            if (zone.getSecured()) { // THE ZONE IS SAFE
+                priorities = buildOrderPathMoveListForZone(zone.getAdjacentZones());
+                if (!priorities.isEmpty()) {
+                    for (int i = 0; i < movingPods; i++) {
+                        if (priorities.get(0).getOrderPath() == 0) {
+                            List<Zone> border = new ArrayList<Zone>();
+                            int solution = 0;
+                            while (solution < priorities.size() && priorities.get(solution).getOrderPath() == 0) {
+                                border.add(priorities.get(solution));
+                                solution++;
+                            }
+                            Collections.sort(border, Zone.valueComparator);
+                            Movement.addMove(zone, border.get(0), moves, world.getUndefended());
+                        } else {
+                            Movement.addMove(zone, priorities.get(0), moves, world.getUndefended());
+                        }
+
+                    }
+                }
+            } else {  // THE ZONE IS A BORDER
+                priorities = zone.getAdjacentZones();
+//                    System.err.println("BEFORE MOVE:"+zone);
+                for (int i = 0; i < movingPods; i++) { // for each pod of the zone
+                    Collections.sort(priorities, Zone.valueComparator);
+//                        System.err.println(zone);
+                    Movement.addMove(zone, priorities.get(0), moves, world.getUndefended());
+
+                }
+            }
+        }
+        return this;
+    }
+
+    public String out() {
+        if (moves.isEmpty()) {
+            return "WAIT";
+        } else {
+            StringBuilder moveOut = new StringBuilder();
+            for (Movement movement : moves.keySet()) {
+                moveOut.append(moves.get(movement)).append(" ").append(movement.getFrom()).append(" ").append(movement.getTo()).append(" ");
+            }
+            return moveOut.toString().trim();
+        }
+    }
+
+    private List<Zone> buildOrderPathMoveListForZone(final List<Zone> zones) {
+        List<Zone> priorityMoves = new ArrayList<Zone>();
+        priorityMoves.addAll(zones);
+        Collections.sort(priorityMoves, new Comparator<Zone>() {
+            @Override
+            public int compare(Zone zone1, Zone zone2) {
+                return (zone1.getOrderPath() - zone2.getOrderPath());
+            }
+        });
+        return priorityMoves;
+    }
+}
+
+class Continent {
+    public Integer continentNumber;
+    public List<Zone> zones = new ArrayList<Zone>();
+
+    Continent(Integer continentNumber) {
+        this.continentNumber = continentNumber;
+    }
+
+    public static List<Continent> buildContinents(World world) {
+        List<Continent> continents = new ArrayList<Continent>();
+        List<Zone> buildingTiles = new ArrayList<Zone>();
+        buildingTiles.addAll(world.getZones());
+        int continentNumber = 0;
+        while (!buildingTiles.isEmpty()) {
+            Continent currentContinent = new Continent(continentNumber);
+            Zone current = buildingTiles.get(0);
+            current.continent = continentNumber;
+            currentContinent.zones.add(current);
+            Boolean continentMapped = false;
+            List<Zone> previousStep = new ArrayList<Zone>();
+            previousStep.add(current);
+            while (!continentMapped) {
+                List<Zone> adj = new ArrayList<Zone>();
+                continentMapped = true;
+                for (Zone zone : previousStep) {
+                    for (Zone adjZone : zone.getAdjacentZones()) {
+                        if (adjZone.continent < 0) {
+                            continentMapped = false;
+                            adjZone.continent = continentNumber;
+                        }
+                        if (!adj.contains(adjZone)) adj.add(adjZone);
+                    }
+                }
+                for (Zone zone : adj) {
+                    if (!currentContinent.zones.contains(zone)) {
+                        currentContinent.zones.add(zone);
+                    }
+                }
+                previousStep = adj;
+
+            }
+            buildingTiles.removeAll(currentContinent.zones);
+            continents.add(currentContinent);
+
+            System.err.println("Cont number: " + continentNumber + " " + currentContinent.continentNumber + " /cont size: " + currentContinent.zones.size());
+            continentNumber++;
+        }
+
+        System.err.println("CONTINENTS: " + continents.size());
+        return continents;
+    }
+}
+
+class Cluster {
+    public Integer clusterId;
+    public List<Zone> zones = new ArrayList<Zone>();
+
+    Cluster(Integer clusterId) {
+        this.clusterId = clusterId;
+    }
+
+    public static List<Cluster> buildClusters(World world) {
+        List<Cluster> clusters = new ArrayList<Cluster>();
+        List<Zone> buildingTiles = new ArrayList<Zone>();
+        buildingTiles.addAll(world.getPlatinumZones());
+        System.err.println("TILES:" + buildingTiles.size());
+        int clusterNumber = 0;
+        while (!buildingTiles.isEmpty()) {
+            Cluster currentCluster = new Cluster(clusterNumber);
+            Zone current = buildingTiles.get(0);
+            current.cluster = clusterNumber;
+            currentCluster.zones.add(current);
+            Boolean clusterMapped = false;
+            List<Zone> previousStep = new ArrayList<Zone>();
+            previousStep.add(current);
+            while (!clusterMapped) {
+                List<Zone> adj = new ArrayList<Zone>();
+                clusterMapped = true;
+                for (Zone zone : previousStep) {
+                    for (Zone adjZone : zone.getAdjacentZones()) {
+                        if (adjZone.cluster < 0 && adjZone.getPlatinum() > 0) {
+                            clusterMapped = false;
+                            adjZone.cluster = clusterNumber;
+                        }
+                        if (!adj.contains(adjZone) && adjZone.getPlatinum() > 0) adj.add(adjZone);
+                    }
+                }
+                for (Zone zone : adj) {
+                    if (!currentCluster.zones.contains(zone)) {
+                        currentCluster.zones.add(zone);
+                    }
+                }
+                previousStep = adj;
+
+            }
+            buildingTiles.removeAll(currentCluster.zones);
+            clusters.add(currentCluster);
+
+            System.err.println(current.getId() + "CLUST: number: " + clusterNumber + " " + currentCluster.clusterId + " / size: " + currentCluster.zones.size());
+            clusterNumber++;
+        }
+
+        System.err.println("CLUSTER SIZE: " + clusters.size());
+        return clusters;
+    }
+}
+
+class World {
+
+    private Integer myId;
+    private Integer playerCount;
+    private Integer zoneCount;
+    private Integer linkCount;
+
+    private Integer maxPods;
+
+    public List<Continent> continents;
+    public List<Cluster> clusters;
+
+    private List<Zone> platinumZones = new ArrayList<Zone>();
+
+    private List<Zone> currentOwnedPodsZones;
+
+    private List<Zone> zones = new ArrayList<Zone>();
+
+    List<Zone> unsecured = new ArrayList<Zone>();
+    List<Zone> secured = new ArrayList<Zone>();
+    List<Zone> undefended = new ArrayList<Zone>(); // for the moment undefended mean zone has enemy && has platinum, do not defend no value cells
+
+    //SET_ORDERING_PATH (trail to move lone pods to frontiers)
+    public void generateOrderPath() {
+        List<Zone> temp = new ArrayList<Zone>();
+        temp.addAll(secured);
+        int lvl = 0;
+        while (!temp.isEmpty() && lvl < 50) {
+            lvl += 1;
+            Set<Zone> toRemove = new HashSet<Zone>();
+            for (Zone zone : temp) {
+                for (Zone adjacent : zone.getAdjacentZones()) {
+                    if (adjacent.getOrderPath() == lvl - 1) {
+                        toRemove.add(zone);
+                        zone.setOrderPath(lvl);
+                        break;
+                    }
+                }
+            }
+            temp.removeAll(toRemove);
+        }
+    }
+
+    // SECURE AND DEFEND /////////////////////////////////////
+    public void secureAndDefend() {
+        undefended = new ArrayList<Zone>();
+
+        for (Zone zone : Zone.getOwnedZones(zones, myId, null)) {
+            zone.setSecured(true);
+            zone.setDefend(0);
+            boolean valuable = zone.getPlatinum() > 0;
+            for (Zone adj : zone.getAdjacentZones()) {
+                if (adj.getOwner() != myId) {
+                    zone.setSecured(false);
+                    zone.setOrderPath(0); // zone is border
+                    if (adj.getOwner() != -1 && valuable) { // enemy && strategic value
+                        zone.setDefend(Math.min(zone.getDefend() + adj.podsOnZone(), 4)); //TODO TOUCHY
+                    }
+
+                } else if (adj.getOwner() == myId) {
+                    zone.setOwnedAdjacentZones(zone.getOwnedAdjacentZones() + 1);
+                }
+            }
+            zone.setSurroundingEnnemies(zone.getDefend());
+
+            if (zone.getSecured())
+                secured.add(zone);
+            else
+                unsecured.add(zone);
+
+            if (zone.getDefend() > 0) { // DEFEND with in zone token
+                if (zone.getMoveAblePods() > 0) {
+                    if (zone.getDefend() > 0) {
+                        int defended = Math.min(zone.getDefend(), zone.getMoveAblePods());
+                        zone.setDefend(zone.getDefend() - defended);
+                        zone.setMoveAblePods(zone.getMoveAblePods() - defended);
+                    }
+
+                }
+                if (zone.getDefend() > 0) undefended.add(zone);
+            }
+
+
+        }
+    }
+
+    public void updateZones(Scanner in) {
+        Integer platinum = in.nextInt(); // my available Platinum
+        maxPods = (new Double(platinum / 20)).intValue();
+
+
+        // UPDATE ZONES /////////////////////////////////////////
+        currentOwnedPodsZones = new ArrayList<Zone>();
+        in.nextLine();
+        for (int i = 0; i < getZoneCount(); i++) {
+            int zId = in.nextInt(); // this zone's ID
+            int ownerId = in.nextInt(); // the player who owns this zone (-1 otherwise)
+            int podsP0 = in.nextInt(); // player 0's PODs on this zone
+            int podsP1 = in.nextInt(); // player 1's PODs on this zone
+            int podsP2 = in.nextInt(); // player 2's PODs on this zone (always 0 for a two player game)
+            int podsP3 = in.nextInt(); // player 3's PODs on this zone (always 0 for a two or three player game)
+            // updating zones
+            Zone zone = zones.get(zId);
+            zone.setOwner(ownerId);
+            zone.getPods()[0] = podsP0;
+            zone.getPods()[1] = podsP1;
+            zone.getPods()[2] = podsP2;
+            zone.getPods()[3] = podsP3;
+            zone.setMoveAblePods(zone.getPods()[myId]);
+            if (zone.getPods()[myId] > 0) currentOwnedPodsZones.add(zone);
+            zone.setMovedTo(0);
+            zone.setOwnedAdjacentZones(0);
+            // reset ordering path
+            zone.setOrderPath(-1);
+            in.nextLine();
+        }
+    }
+
+    public void initWorld(Scanner in) { // can be 1 second long.
         // FOR zoneCount -> CREATE ZONE
         in.nextLine();
-        for (int i = 0; i < zoneCount; i++) {
+        for (int i = 0; i < getZoneCount(); i++) {
             int zoneId = in.nextInt(); // this zone's ID (between 0 and zoneCount-1)
             int platinumSource = in.nextInt(); // the amount of Platinum this zone can provide per game turn
             zones.add(new Zone(zoneId, platinumSource));
@@ -34,7 +430,7 @@ class Player {
         }
 
         // FOR linkCount -> CREATE LINK
-        for (int i = 0; i < linkCount; i++) {
+        for (int i = 0; i < getLinkCount(); i++) {
             Zone zone1 = zones.get(in.nextInt());
             Zone zone2 = zones.get(in.nextInt());
             zone1.getAdjacentZones().add(zone2);
@@ -53,228 +449,64 @@ class Player {
         }
 
         // SORTING PLAT  allow for drop on low value + near clusters
-        Collections.sort(platinumZones, Zone.platinumComparator);
+        Collections.sort(platinumZones, Zone.rawPlatinumComparator);
 
-        // GAME LOOP /////////////////////////////////////////
-        while (true) {
-            Date date1 = new Date();
-            Date date2 = new Date();
-            currentOwnedPodsZones = new ArrayList<Zone>();
-            int platinum = in.nextInt(); // my available Platinum
-            int maxPods = (new Double(platinum / 20)).intValue();
-
-            // UPDATE ZONES /////////////////////////////////////////
-            in.nextLine();
-            for (int i = 0; i < zoneCount; i++) {
-                int zId = in.nextInt(); // this zone's ID
-                int ownerId = in.nextInt(); // the player who owns this zone (-1 otherwise)
-                int podsP0 = in.nextInt(); // player 0's PODs on this zone
-                int podsP1 = in.nextInt(); // player 1's PODs on this zone
-                int podsP2 = in.nextInt(); // player 2's PODs on this zone (always 0 for a two player game)
-                int podsP3 = in.nextInt(); // player 3's PODs on this zone (always 0 for a two or three player game)
-                // updating zones
-                Zone zone = zones.get(zId);
-                zone.setOwner(ownerId);
-                zone.getPods()[0] = podsP0;
-                zone.getPods()[1] = podsP1;
-                zone.getPods()[2] = podsP2;
-                zone.getPods()[3] = podsP3;
-                zone.setMoveAblePods(zone.getPods()[myId]);
-                if (zone.getPods()[myId] > 0) currentOwnedPodsZones.add(zone);
-                zone.setMovedTo(0);
-                zone.setOwnedAdjacentZones(0);
-                // reset ordering path
-                zone.setOrderPath(-1);
-                in.nextLine();
-            }
-
-            Integer[] income = new Integer[]{0, 0, 0, 0};
-            for (Zone zone : zones) {
-                if (zone.getOwner() >= 0) income[zone.getOwner()] += zone.getPlatinum();
-            }
-            System.err.println("INCOME me:" + myId + "  // P0 " + income[0] + " P1 " + income[1] + " P2 " + income[2] + " P3 " + income[3]);
-
-
-            // SECURE AND DEFEND /////////////////////////////////////
-            List<Zone> unsecured = new ArrayList<Zone>();
-            List<Zone> secured = new ArrayList<Zone>();
-            List<Zone> undefended = new ArrayList<Zone>(); // for the moment undefended mean zone has enemy && has platinum, do not defend no value cells
-            for (Zone zone : Zone.getOwnedZones(zones, myId, null)) {
-                zone.setSecured(true);
-                zone.setDefend(0);
-                boolean valuable = zone.getPlatinum() > 0;
-                for (Zone adj : zone.getAdjacentZones()) {
-                    if (adj.getOwner() != myId) {
-                        zone.setSecured(false);
-                        zone.setOrderPath(0); // zone is border
-                        if (adj.getOwner() != -1 && valuable) { // enemy && strategic value
-                            zone.setDefend(Math.min(zone.getDefend() + adj.podsOnZone(), 4)); //TODO TOUCHY
-                        }
-
-                    } else if (adj.getOwner() == myId) {
-                        zone.setOwnedAdjacentZones(zone.getOwnedAdjacentZones() + 1);
-                    }
-                }
-                zone.setSurroundingEnnemies(zone.getDefend());
-
-                if (zone.getSecured())
-                    secured.add(zone);
-                else
-                    unsecured.add(zone);
-
-                if (zone.getDefend() > 0) { // DEFEND with in zone token
-                    if (zone.getMoveAblePods() > 0) {
-                        if (zone.getDefend() > 0) {
-                            int defended = Math.min(zone.getDefend(), zone.getMoveAblePods());
-                            zone.setDefend(zone.getDefend() - defended);
-                            zone.setMoveAblePods(zone.getMoveAblePods() - defended);
-                        }
-
-                    }
-                    if (zone.getDefend() > 0) undefended.add(zone);
-                }
-
-
-            }
-
-            //SET_ORDERING_PATH (trail to move lone pods to frontiers)
-            List<Zone> temp = new ArrayList<Zone>();
-            temp.addAll(secured);
-            int lvl = 0;
-            while (!temp.isEmpty() && lvl < 50) {
-                lvl += 1;
-                Set<Zone> toRemove = new HashSet<Zone>();
-                for (Zone zone : temp) {
-                    for (Zone adjacent : zone.getAdjacentZones()) {
-                        if (adjacent.getOrderPath() == lvl - 1) {
-                            toRemove.add(zone);
-                            zone.setOrderPath(lvl);
-                            break;
-                        }
-                    }
-                }
-                temp.removeAll(toRemove);
-            }
-
-            // MOVE /////////////////////////////////////////////
-            Map<Movement, Integer> moves = new HashMap<Movement, Integer>();
-            for (Zone zone : currentOwnedPodsZones) { // for each zone where I have pods
-                List<Zone> priorities;
-
-                //building pods move command
-                int movingPods = zone.getMoveAblePods();
-                if (zone.getSecured()) { // THE ZONE IS SAFE
-                    priorities = buildOrderPathMoveListForZone(zone.getAdjacentZones());
-                    if (!priorities.isEmpty()) {
-                        for (int i = 0; i < movingPods; i++) {
-                            if (priorities.get(0).getOrderPath() == 0) {
-                                List<Zone> border = new ArrayList<Zone>();
-                                int solution = 0;
-                                while (solution < priorities.size() && priorities.get(solution).getOrderPath() == 0) {
-                                    border.add(priorities.get(solution));
-                                    solution++;
-                                }
-                                Collections.sort(border, Zone.valueComparator);
-                                Movement.addMove(zone, border.get(0), moves, undefended);
-                            } else {
-                                Movement.addMove(zone, priorities.get(0), moves, undefended);
-                            }
-
-                        }
-                    }
-                } else {  // THE ZONE IS A BORDER
-                    priorities = zone.getAdjacentZones();
-//                    System.err.println("BEFORE MOVE:"+zone);
-                    for (int i = 0; i < movingPods; i++) { // for each pod of the zone
-                        Collections.sort(priorities, Zone.valueComparator);
-//                        System.err.println(zone);
-                        Movement.addMove(zone, priorities.get(0), moves, undefended);
-
-                    }
-                }
-            }
-            if (moves.isEmpty()) {
-                System.out.println("WAIT");
-            } else {
-                StringBuilder moveOut = new StringBuilder();
-                for (Movement movement : moves.keySet()) {
-                    moveOut.append(moves.get(movement) + " " + movement.getFrom() + " " + movement.getTo() + " ");
-                }
-                System.out.println(moveOut.toString().trim());
-            }
-
-
-            int DROP_SIZE = 2;
-            Map<Integer, Integer> drops = new HashMap<Integer, Integer>();
-            // BUY ////////////////////////////////////////////////
-            List<Zone> dropTo = new ArrayList<Zone>();
-            dropTo.addAll(Zone.getNeutralZones(platinumZones, null));
-            List<Zone> mines = Zone.getOwnedZones(zones, myId, false);
-            Collections.sort(mines, Zone.valueComparator);
-            dropTo.addAll(mines);
-
-            // defensive drop
-            Collections.sort(undefended, Zone.rawPlatinumComparator);
-            if (undefended.size() > 0) {
-                while (!undefended.isEmpty() && maxPods > 0) {
-                    Zone drop = undefended.get(0);
-
-                    if (drop.getDefend() > 0) { // DEFEND with in drop token
-                        if (drop.getMoveAblePods() > 0) {
-                            if (drop.getDefend() > 0) {
-                                int defended = Math.min(drop.getDefend(), drop.getMoveAblePods());
-                                drop.setDefend(drop.getDefend() - defended);
-                                drop.setMoveAblePods(drop.getMoveAblePods() - defended);
-                            }
-
-                        }
-                    }
-
-                    if (drop.getDefend() > 0) {
-                        maxPods = Movement.addDrop(drop, 1, drops, maxPods, undefended);
-                    }
-                    undefended.remove(drop);
-                }
-            }
-
-            if (!dropTo.isEmpty()) {
-                //buy
-                Integer zoneToDropIndex = 0;
-                while (maxPods > 0) {
-                    maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, maxPods, undefended);
-                    zoneToDropIndex++;
-                    if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
-                }
-            }
-
-            //  OUTPUT
-            if (drops.isEmpty()) {
-                System.out.println("WAIT");
-            } else {
-                StringBuilder buyOut = new StringBuilder();
-//                System.err.println("DROPS:"+drops);
-                for (Integer zoneId : drops.keySet()) {
-                    buyOut.append(drops.get(zoneId) + " " + zoneId + " ");
-                }
-                System.out.println(buyOut.toString().trim());
-            }
-
-
-//            date2 = new Date(); System.err.println("TIME:"+(date2.getTime()-date1.getTime()));
-        }
+        continents = Continent.buildContinents(this);
+        clusters = Cluster.buildClusters(this);
     }
 
-    public static List<Zone> buildOrderPathMoveListForZone(final List<Zone> zones) {
-        List<Zone> priorityMoves = new ArrayList<Zone>();
-        priorityMoves.addAll(zones);
-        Collections.sort(priorityMoves, new Comparator<Zone>() {
-            @Override
-            public int compare(Zone zone1, Zone zone2) {
-                return (zone1.getOrderPath() - zone2.getOrderPath());
-            }
-        });
-        return priorityMoves;
+    public List<Zone> getUndefended() {
+        return undefended;
     }
+
+    public List<Zone> getPlatinumZones() {
+        return platinumZones;
+    }
+
+    public List<Zone> getCurrentOwnedPodsZones() {
+        return currentOwnedPodsZones;
+    }
+
+    public Integer getMyId() {
+        return myId;
+    }
+
+    public void setMyId(Integer myId) {
+        this.myId = myId;
+    }
+
+    public void setPlayerCount(Integer playerCount) {
+        this.playerCount = playerCount;
+    }
+
+    public Integer getZoneCount() {
+        return zoneCount;
+    }
+
+    public void setZoneCount(Integer zoneCount) {
+        this.zoneCount = zoneCount;
+    }
+
+    public Integer getLinkCount() {
+        return linkCount;
+    }
+
+    public void setLinkCount(Integer linkCount) {
+        this.linkCount = linkCount;
+    }
+
+    public List<Zone> getZones() {
+        return zones;
+    }
+
+    public Integer getMaxPods() {
+        return maxPods;
+    }
+
+    public void setMaxPods(Integer maxPods) {
+        this.maxPods = maxPods;
+    }
+
 }
 
 class Movement {
@@ -302,7 +534,7 @@ class Movement {
             to.setDefend(to.getDefend() - 1); // zone defended by +1 pods
             if (to.getDefend() > 0) toDefend.remove(to);
         }
-        addMove(new Integer(from.getId()), new Integer(to.getId()), moves);
+        addMove(from.getId(), to.getId(), moves);
     }
 
     private static void addMove(Integer from, Integer to, Map<Movement, Integer> moves) {
@@ -365,9 +597,12 @@ class Zone {
     private Integer adjacentPlatinum = 0;
     private Integer ownedAdjacentZones = 0;
 
-    public Integer getSurroundingEnnemies() {
+    public Integer continent = -1;
+    public Integer cluster = -1;
+
+/*    public Integer getSurroundingEnnemies() {
         return surroundingEnnemies;
-    }
+    }*/
 
     public void setSurroundingEnnemies(Integer surroundingEnnemies) {
         this.surroundingEnnemies = surroundingEnnemies;
@@ -431,14 +666,6 @@ class Zone {
         this.secured = secured;
     }
 
-    // public Integer getMyDensity() {
-    //    return myDensity;
-    //}
-
-    //public void setMyDensity(Integer myDensity) {
-    //    this.myDensity = myDensity;
-    //}
-
     public Integer getValue(int myId) {
         Integer value = 0;
 
@@ -478,9 +705,6 @@ class Zone {
         return pods;
     }
 
-    public void setPods(Integer[] pods) {
-        this.pods = pods;
-    }
 
     public Integer getPlatinum() {
         return platinum;
@@ -523,13 +747,13 @@ class Zone {
         return neutralAdjacentZones;
     }
 
-    public static List<Zone> getNotOwnedZones(List<Zone> zones, int myId) {
+/*    public static List<Zone> getNotOwnedZones(List<Zone> zones, int myId) {
         List<Zone> notOwnedZones = new ArrayList<Zone>();
         for (Zone zone : zones) {
             if (zone.getOwner() != myId) notOwnedZones.add(zone);
         }
         return notOwnedZones;
-    }
+    }*/
 
     public static List<Zone> getOwnedZones(List<Zone> zones, int myId, Boolean secured) {
         List<Zone> ownedZones = new ArrayList<Zone>();
@@ -561,7 +785,7 @@ class Zone {
     public static Comparator<Zone> rawPlatinumComparator = new Comparator<Zone>() {
         @Override
         public int compare(Zone zone1, Zone zone2) {
-            return (zone1.getPlatinum()- zone2.getPlatinum()) * -1;
+            return (zone1.getPlatinum() - zone2.getPlatinum()) * -1;
         }
     };
 
@@ -569,13 +793,8 @@ class Zone {
     public static Comparator<Zone> platinumComparator = new Comparator<Zone>() {
         @Override
         public int compare(Zone zone1, Zone zone2) {  // sort lowest to highest if sortOrderForPlat >0
-//            if (zone1.getPlatinum().equals(zone2.getPlatinum())) {
-//                return (zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) * 1;
-//            } else {
-            return (zone1.getPlatinum() + zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() - zone2.getPlatinum()) * -1;
-//            }
+            return (-zone1.getPlatinum() + zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() + zone2.getPlatinum()) * -1;
 
-//            return (zone1.getPlatinum() - zone2.getPlatinum() + (new Double((zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum()) / 2 )).intValue())* -1;
         }
     };
 }
