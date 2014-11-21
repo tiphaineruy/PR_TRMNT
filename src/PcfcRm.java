@@ -1,3 +1,5 @@
+import com.sun.jmx.remote.internal.ArrayQueue;
+
 import java.util.*;
 
 /**
@@ -17,7 +19,7 @@ class Player {
         DropManager dropManager = new DropManager(world);
 
         Scanner in = new Scanner(System.in);
-        world.setPlayerCount(in.nextInt()); // the amount of players (2 to 4)
+        world.playerCount = in.nextInt(); // the amount of players (2 to 4)
         world.setMyId(Zone.myId = myId = in.nextInt()); // my player ID (0, 1, 2 or 3)
         world.setZoneCount(in.nextInt());// the amount of zones on the map
         world.setLinkCount(in.nextInt()); // the amount of links between all zones
@@ -71,7 +73,7 @@ class DropManager {
         // defensive drop
         Collections.sort(world.getUndefended(), Zone.rawPlatinumComparator);
         if (world.getUndefended().size() > 0) {
-            while (!world.getUndefended().isEmpty() && world.getMaxPods() > 0) {
+            while (!world.getUndefended().isEmpty() && world.me.maxPods > 0) {
                 Zone drop = world.getUndefended().get(0);
 
                 if (drop.getDefend() > 0) { // DEFEND with in drop token
@@ -86,7 +88,7 @@ class DropManager {
                 }
 
                 if (drop.getDefend() > 0) {
-                    world.setMaxPods(Movement.addDrop(drop, 1, drops, world.getMaxPods(), world.getUndefended()));
+                    world.me.maxPods = Movement.addDrop(drop, 1, drops, world.me.maxPods, world.getUndefended());
                 }
                 world.getUndefended().remove(drop);
             }
@@ -95,8 +97,8 @@ class DropManager {
         if (!dropTo.isEmpty()) {
             //buy
             Integer zoneToDropIndex = 0;
-            while (world.getMaxPods() > 0) {
-                world.setMaxPods(Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, world.getMaxPods(), world.getUndefended()));
+            while (world.me.maxPods > 0) {
+                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, world.me.maxPods, world.getUndefended());
                 zoneToDropIndex++;
                 if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
             }
@@ -130,7 +132,7 @@ class MovementManager {
 
     public MovementManager update() {
         moves = new HashMap<Movement, Integer>();
-        for (Zone zone : world.getCurrentOwnedPodsZones()) { // for each zone where I have pods
+        for (Zone zone : world.me.ownedWithPods) { // for each zone where I have pods
             List<Zone> priorities;
 
             //building pods move command
@@ -191,6 +193,36 @@ class MovementManager {
         });
         return priorityMoves;
     }
+}
+
+class PlayerInfo{
+    public Integer id;
+//    public Integer platinum = 0;
+    public Integer maxPods = 0;
+    public Integer income =0;
+    public List<Zone> owned = new ArrayList<Zone>();
+    public List<Zone> ownedWithPods = new ArrayList<Zone>();
+
+    PlayerInfo(Integer id) {
+        this.id = id;
+    }
+
+    public static List<PlayerInfo> buildPlayer(World world){
+        List<PlayerInfo> players = new ArrayList<PlayerInfo>();
+        for (int i = 0; i < world.playerCount ; i++) {
+            PlayerInfo player = new PlayerInfo(i);
+            players.add(player);
+        }
+        return players;
+    }
+
+    public static void resetPlayers(List<PlayerInfo> players){
+        for (PlayerInfo player:players){
+            player.owned = new ArrayList<Zone>();
+            player.ownedWithPods = new ArrayList<Zone>();
+        }
+    }
+
 }
 
 class Continent {
@@ -303,24 +335,22 @@ class Cluster {
 class World {
 
     private Integer myId;
-    private Integer playerCount;
+    public PlayerInfo me;
+    public Integer playerCount;
     private Integer zoneCount;
     private Integer linkCount;
 
-    private Integer maxPods;
-
     public List<Continent> continents;
     public List<Cluster> clusters;
+    public List<PlayerInfo> players;
 
     private List<Zone> platinumZones = new ArrayList<Zone>();
 
-    private List<Zone> currentOwnedPodsZones;
-
     private List<Zone> zones = new ArrayList<Zone>();
 
-    List<Zone> unsecured = new ArrayList<Zone>();
-    List<Zone> secured = new ArrayList<Zone>();
-    List<Zone> undefended = new ArrayList<Zone>(); // for the moment undefended mean zone has enemy && has platinum, do not defend no value cells
+    public List<Zone> unsecured = new ArrayList<Zone>();
+    public List<Zone> secured = new ArrayList<Zone>();
+    public List<Zone> undefended = new ArrayList<Zone>(); // for the moment undefended mean zone has enemy && has platinum, do not defend no value cells
 
     //SET_ORDERING_PATH (trail to move lone pods to frontiers)
     public void generateOrderPath() {
@@ -388,11 +418,10 @@ class World {
 
     public void updateZones(Scanner in) {
         Integer platinum = in.nextInt(); // my available Platinum
-        maxPods = (new Double(platinum / 20)).intValue();
-
-
+        me.maxPods = (new Double(platinum / 20)).intValue();
+        PlayerInfo.resetPlayers(players);
         // UPDATE ZONES /////////////////////////////////////////
-        currentOwnedPodsZones = new ArrayList<Zone>();
+
         in.nextLine();
         for (int i = 0; i < getZoneCount(); i++) {
             int zId = in.nextInt(); // this zone's ID
@@ -404,12 +433,17 @@ class World {
             // updating zones
             Zone zone = zones.get(zId);
             zone.setOwner(ownerId);
+            if(ownerId >=0) players.get(ownerId).owned.add(zone);
             zone.getPods()[0] = podsP0;
+            if (podsP0>0 && ownerId ==0) players.get(0).ownedWithPods.add(zone);
             zone.getPods()[1] = podsP1;
+            if (podsP0>0 && ownerId ==1) players.get(1).ownedWithPods.add(zone);
             zone.getPods()[2] = podsP2;
+            if (podsP0>0 && ownerId ==2) players.get(2).ownedWithPods.add(zone);
             zone.getPods()[3] = podsP3;
+            if (podsP0>0 && ownerId ==3) players.get(3).ownedWithPods.add(zone);
+
             zone.setMoveAblePods(zone.getPods()[myId]);
-            if (zone.getPods()[myId] > 0) currentOwnedPodsZones.add(zone);
             zone.setMovedTo(0);
             zone.setOwnedAdjacentZones(0);
             // reset ordering path
@@ -453,6 +487,8 @@ class World {
 
         continents = Continent.buildContinents(this);
         clusters = Cluster.buildClusters(this);
+        players = PlayerInfo.buildPlayer(this);
+        me = players.get(myId);
     }
 
     public List<Zone> getUndefended() {
@@ -463,20 +499,12 @@ class World {
         return platinumZones;
     }
 
-    public List<Zone> getCurrentOwnedPodsZones() {
-        return currentOwnedPodsZones;
-    }
-
     public Integer getMyId() {
         return myId;
     }
 
     public void setMyId(Integer myId) {
         this.myId = myId;
-    }
-
-    public void setPlayerCount(Integer playerCount) {
-        this.playerCount = playerCount;
     }
 
     public Integer getZoneCount() {
@@ -498,15 +526,6 @@ class World {
     public List<Zone> getZones() {
         return zones;
     }
-
-    public Integer getMaxPods() {
-        return maxPods;
-    }
-
-    public void setMaxPods(Integer maxPods) {
-        this.maxPods = maxPods;
-    }
-
 }
 
 class Movement {
