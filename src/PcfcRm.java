@@ -1,5 +1,3 @@
-import com.sun.jmx.remote.internal.ArrayQueue;
-
 import java.util.*;
 
 /**
@@ -20,32 +18,34 @@ class Player {
 
         Scanner in = new Scanner(System.in);
         world.playerCount = in.nextInt(); // the amount of players (2 to 4)
-        world.setMyId(Zone.myId = myId = in.nextInt()); // my player ID (0, 1, 2 or 3)
+        world.myId = Zone.myId = myId = in.nextInt(); // my player ID (0, 1, 2 or 3)
         world.setZoneCount(in.nextInt());// the amount of zones on the map
         world.setLinkCount(in.nextInt()); // the amount of links between all zones
 
         world.initWorld(in);
-
+        System.err.println(world.continents);
+        System.err.println(world.clusters);
+        System.err.println("ME:" + myId);
+        world.round = 0;
 
         // GAME LOOP /////////////////////////////////////////
         while (true) {
 /*            Date date1 = new Date();
             Date date2 = new Date();*/
             world.updateZones(in);
-/*            Integer[] income = new Integer[]{0, 0, 0, 0};
-            for (Zone zone : zones) {
-                if (zone.getOwner() >= 0) income[zone.getOwner()] += zone.getPlatinum();
-            }
-            System.err.println("INCOME me:" + myId + "  // P0 " + income[0] + " P1 " + income[1] + " P2 " + income[2] + " P3 " + income[3]);*/
-
+//            System.err.println("Players: " + world.players);
             world.secureAndDefend();
             world.generateOrderPath();
 
             // MOVE /////////////////////////////////////////////
             System.out.println(moveManager.update().out());
             // DROP ////////////////////////////////////////////
-            System.out.println(dropManager.update().out());
+            if (world.round == 0) // FIRST DROP
+                System.out.println(dropManager.firstDropUpdate().out());
+            else
+                System.out.println(dropManager.update().out());
 //            date2 = new Date(); System.err.println("TIME:"+(date2.getTime()-date1.getTime()));
+            world.round++;
         }
     }
 
@@ -64,9 +64,9 @@ class DropManager {
         drops = new HashMap<Integer, Integer>();
         // BUY ////////////////////////////////////////////////
         List<Zone> dropTo = new ArrayList<Zone>();
-        dropTo.addAll(Zone.getNeutralZones(world.getPlatinumZones(), null));
-
-        List<Zone> mines = Zone.getOwnedZones(world.getZones(), world.getMyId(), false);
+        dropTo.addAll(Zone.getNeutralZones(world.getZones()));
+        Collections.sort(dropTo, Zone.rawPlatinumComparator);
+        List<Zone> mines = world.unsecured;
         Collections.sort(mines, Zone.valueComparator);
         dropTo.addAll(mines);
 
@@ -75,17 +75,6 @@ class DropManager {
         if (world.getUndefended().size() > 0) {
             while (!world.getUndefended().isEmpty() && world.me.maxPods > 0) {
                 Zone drop = world.getUndefended().get(0);
-
-                if (drop.getDefend() > 0) { // DEFEND with in drop token
-                    if (drop.getMoveAblePods() > 0) {
-                        if (drop.getDefend() > 0) {
-                            int defended = Math.min(drop.getDefend(), drop.getMoveAblePods());
-                            drop.setDefend(drop.getDefend() - defended);
-                            drop.setMoveAblePods(drop.getMoveAblePods() - defended);
-                        }
-
-                    }
-                }
 
                 if (drop.getDefend() > 0) {
                     world.me.maxPods = Movement.addDrop(drop, 1, drops, world.me.maxPods, world.getUndefended());
@@ -98,12 +87,103 @@ class DropManager {
             //buy
             Integer zoneToDropIndex = 0;
             while (world.me.maxPods > 0) {
-                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), (new Double(dropTo.get(zoneToDropIndex).getPlatinum() / 2)).intValue() + 1, drops, world.me.maxPods, world.getUndefended());
+                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), 1, drops, world.me.maxPods, world.getUndefended());
                 zoneToDropIndex++;
                 if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
             }
         }
         return this;
+    }
+
+    public DropManager firstDropUpdate() {
+        // clusters + continents +  world.playerCount;
+        drops = new HashMap<Integer, Integer>();
+        // BUY ////////////////////////////////////////////////
+        List<Zone> dropTo = new ArrayList<Zone>();
+        if (world.playerCount == 2) first1v1(dropTo);
+        if (world.playerCount == 3) first1v2(dropTo);
+        if (world.playerCount == 4) first1v3(dropTo);
+        return this;
+    }
+
+    private void first1v1(List<Zone> dropTo) {
+        // 1v1 -> drop everywhere 1 per zone starting biggest clusters
+        Collections.sort(world.clusters, Cluster.rawClusterComparator);
+        for (Cluster cluster : world.clusters) {
+            dropTo.addAll(cluster.high);
+            dropTo.addAll(cluster.medium);
+        }
+        for (Cluster cluster : world.clusters) {
+            dropTo.addAll(cluster.low);
+        }
+
+        if (!dropTo.isEmpty()) {
+            //buy
+            Integer zoneToDropIndex = 0;
+            while (world.me.maxPods > 0) {
+                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), 1, drops, world.me.maxPods, world.getUndefended());
+                zoneToDropIndex++;
+                if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
+            }
+        }
+
+    }
+
+    private void first1v2(List<Zone> dropTo) {
+        // 1v2 -> drop 2 in medium for biggest clusters take best continent continent
+        Collections.sort(world.continents, Continent.rawContinentComparator);
+        Collections.sort(world.continents.get(0).clusters, Cluster.rawClusterComparator);
+        for (Cluster cluster : world.continents.get(0).clusters) {
+            dropTo.addAll(cluster.medium);
+            dropTo.addAll(cluster.high);
+        }
+        for (Cluster cluster : world.clusters) {
+            dropTo.addAll(cluster.low);
+        }
+
+        if (!dropTo.isEmpty()) {
+            //buy
+            Integer zoneToDropIndex = 0;
+            while (world.me.maxPods > 0) {
+                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), 2, drops, world.me.maxPods, world.getUndefended());
+                zoneToDropIndex++;
+                if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
+            }
+        }
+    }
+
+    private void first1v3(List<Zone> dropTo) {
+        // 1v3 -> drop 2 in medium for biggest clusters take best continent continent + 1 in separate continent.
+        Collections.sort(world.continents, Continent.rawContinentComparator);
+        Collections.sort(world.continents.get(1).clusters, Cluster.rawClusterComparator);
+        for (Cluster cluster : world.continents.get(1).clusters) {
+            dropTo.addAll(cluster.medium);
+        }
+        for (Cluster cluster : world.continents.get(1).clusters) {
+            dropTo.addAll(cluster.high);
+        }
+        for (Cluster cluster : world.continents.get(1).clusters) {
+            dropTo.addAll(cluster.low);
+        }
+
+        if (world.continents.size() > 2) {
+            Collections.sort(world.continents, Continent.sizeContinentComparator);
+            if (world.continents.get(world.continents.size() - 2).clusters.size() > 0)
+                dropTo.add(0, world.continents.get(world.continents.size() - 2).clusters.get(0).zones.get(0));
+            else
+                dropTo.add(0, world.continents.get(world.continents.size() - 2).zones.get(0));
+
+        }
+
+        if (!dropTo.isEmpty()) {
+            //buy
+            Integer zoneToDropIndex = 0;
+            while (world.me.maxPods > 0) {
+                world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), 2, drops, world.me.maxPods, world.getUndefended());
+                zoneToDropIndex++;
+                if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
+            }
+        }
     }
 
     public String out() {
@@ -141,10 +221,10 @@ class MovementManager {
                 priorities = buildOrderPathMoveListForZone(zone.getAdjacentZones());
                 if (!priorities.isEmpty()) {
                     for (int i = 0; i < movingPods; i++) {
-                        if (priorities.get(0).getOrderPath() == 0) {
+                        if (priorities.get(0).getOrderPath() < 0) {
                             List<Zone> border = new ArrayList<Zone>();
                             int solution = 0;
-                            while (solution < priorities.size() && priorities.get(solution).getOrderPath() == 0) {
+                            while (solution < priorities.size() && priorities.get(solution).getOrderPath() < 0) {
                                 border.add(priorities.get(solution));
                                 solution++;
                             }
@@ -158,10 +238,10 @@ class MovementManager {
                 }
             } else {  // THE ZONE IS A BORDER
                 priorities = zone.getAdjacentZones();
-//                    System.err.println("BEFORE MOVE:"+zone);
+                int maxMoving = Math.max(8,movingPods);
+                int leftOver = movingPods<8?0:movingPods-8;
                 for (int i = 0; i < movingPods; i++) { // for each pod of the zone
                     Collections.sort(priorities, Zone.valueComparator);
-//                        System.err.println(zone);
                     Movement.addMove(zone, priorities.get(0), moves, world.getUndefended());
 
                 }
@@ -195,11 +275,11 @@ class MovementManager {
     }
 }
 
-class PlayerInfo{
+class PlayerInfo {
     public Integer id;
-//    public Integer platinum = 0;
+    //    public Integer platinum = 0;
     public Integer maxPods = 0;
-    public Integer income =0;
+    public Integer income = 0;
     public List<Zone> owned = new ArrayList<Zone>();
     public List<Zone> ownedWithPods = new ArrayList<Zone>();
 
@@ -207,30 +287,51 @@ class PlayerInfo{
         this.id = id;
     }
 
-    public static List<PlayerInfo> buildPlayer(World world){
+    public static List<PlayerInfo> buildPlayer(World world) {
         List<PlayerInfo> players = new ArrayList<PlayerInfo>();
-        for (int i = 0; i < world.playerCount ; i++) {
+        for (int i = 0; i < world.playerCount; i++) {
             PlayerInfo player = new PlayerInfo(i);
             players.add(player);
         }
         return players;
     }
 
-    public static void resetPlayers(List<PlayerInfo> players){
-        for (PlayerInfo player:players){
+    public static void resetPlayers(List<PlayerInfo> players) {
+        for (PlayerInfo player : players) {
+            player.income = 0;
             player.owned = new ArrayList<Zone>();
             player.ownedWithPods = new ArrayList<Zone>();
         }
     }
 
+    @Override
+    public String toString() {
+        return "/P:" + id + " inc:" + income + " owned:" + owned.size();
+    }
 }
 
 class Continent {
-    public Integer continentNumber;
+    public List<Cluster> clusters = new ArrayList<Cluster>();
+    public Integer value = 0;
+    public Integer size = 0;
+
+    public Integer id;
     public List<Zone> zones = new ArrayList<Zone>();
 
-    Continent(Integer continentNumber) {
-        this.continentNumber = continentNumber;
+    Continent(Integer id) {
+        this.id = id;
+    }
+
+    public static void buildContinentInfo(World world) {
+        for (Cluster cluster : world.clusters) {
+            world.continents.get(cluster.continent).clusters.add(cluster);
+        }
+        for (Continent continent : world.continents) {
+            continent.size = continent.zones.size();
+            for (Cluster cluster : continent.clusters) {
+                continent.value += cluster.value;
+            }
+        }
     }
 
     public static List<Continent> buildContinents(World world) {
@@ -269,28 +370,65 @@ class Continent {
             buildingTiles.removeAll(currentContinent.zones);
             continents.add(currentContinent);
 
-            System.err.println("Cont number: " + continentNumber + " " + currentContinent.continentNumber + " /cont size: " + currentContinent.zones.size());
             continentNumber++;
         }
 
-        System.err.println("CONTINENTS: " + continents.size());
         return continents;
+    }
+
+    public static Comparator<Continent> rawContinentComparator = new Comparator<Continent>() {
+        @Override
+        public int compare(Continent c1, Continent c2) {
+            return (c1.value - c2.value) * -1;
+        }
+    };
+    public static Comparator<Continent> sizeContinentComparator = new Comparator<Continent>() {
+        @Override
+        public int compare(Continent c1, Continent c2) {
+            return (c1.size - c2.size) * -1;
+        }
+    };
+
+    @Override
+    public String toString() {
+        return "Continent:" + id + " value:" + value + " size:" + size + " clusters:" + clusters.size();
     }
 }
 
 class Cluster {
     public Integer clusterId;
     public List<Zone> zones = new ArrayList<Zone>();
+    public Integer size = 0;
+    public Integer value = 0;
+    public Integer continent = -1;
+
+    public List<Zone> high = new ArrayList<Zone>(); // 6/5
+    public List<Zone> medium = new ArrayList<Zone>(); // 4/3
+    public List<Zone> low = new ArrayList<Zone>(); // 2/1
+
 
     Cluster(Integer clusterId) {
         this.clusterId = clusterId;
     }
 
+    public static void buildClustersInfo(World world) {
+        for (Cluster cluster : world.clusters) {
+            cluster.size = cluster.zones.size();
+            for (Zone zone : cluster.zones) {
+                if (cluster.continent < 0) cluster.continent = zone.continent;
+                cluster.value += zone.getPlatinum();
+                if (zone.getPlatinum() == 1 || zone.getPlatinum() == 2) cluster.low.add(zone);
+                if (zone.getPlatinum() == 3 || zone.getPlatinum() == 4) cluster.medium.add(zone);
+                if (zone.getPlatinum() == 5 || zone.getPlatinum() == 6) cluster.high.add(zone);
+            }
+        }
+    }
+
+
     public static List<Cluster> buildClusters(World world) {
         List<Cluster> clusters = new ArrayList<Cluster>();
         List<Zone> buildingTiles = new ArrayList<Zone>();
         buildingTiles.addAll(world.getPlatinumZones());
-        System.err.println("TILES:" + buildingTiles.size());
         int clusterNumber = 0;
         while (!buildingTiles.isEmpty()) {
             Cluster currentCluster = new Cluster(clusterNumber);
@@ -323,18 +461,28 @@ class Cluster {
             buildingTiles.removeAll(currentCluster.zones);
             clusters.add(currentCluster);
 
-            System.err.println(current.getId() + "CLUST: number: " + clusterNumber + " " + currentCluster.clusterId + " / size: " + currentCluster.zones.size());
             clusterNumber++;
         }
 
-        System.err.println("CLUSTER SIZE: " + clusters.size());
         return clusters;
     }
+
+    @Override
+    public String toString() {
+        return "/Clus:" + clusterId + " size:" + size + " val:" + value + " cont:" + continent;
+    }
+
+    public static Comparator<Cluster> rawClusterComparator = new Comparator<Cluster>() {
+        @Override
+        public int compare(Cluster c1, Cluster c2) {
+            return (c1.value - c2.value) * -1;
+        }
+    };
 }
 
 class World {
-
-    private Integer myId;
+    public Integer round;
+    public Integer myId;
     public PlayerInfo me;
     public Integer playerCount;
     private Integer zoneCount;
@@ -376,8 +524,10 @@ class World {
     // SECURE AND DEFEND /////////////////////////////////////
     public void secureAndDefend() {
         undefended = new ArrayList<Zone>();
+        secured = new ArrayList<Zone>();
+        unsecured = new ArrayList<Zone>();
 
-        for (Zone zone : Zone.getOwnedZones(zones, myId, null)) {
+        for (Zone zone : me.owned) {
             zone.setSecured(true);
             zone.setDefend(0);
             boolean valuable = zone.getPlatinum() > 0;
@@ -411,8 +561,6 @@ class World {
                 }
                 if (zone.getDefend() > 0) undefended.add(zone);
             }
-
-
         }
     }
 
@@ -433,15 +581,18 @@ class World {
             // updating zones
             Zone zone = zones.get(zId);
             zone.setOwner(ownerId);
-            if(ownerId >=0) players.get(ownerId).owned.add(zone);
+            if (ownerId >= 0) {
+                players.get(ownerId).owned.add(zone);
+                players.get(ownerId).income += zone.getPlatinum();
+            }
             zone.getPods()[0] = podsP0;
-            if (podsP0>0 && ownerId ==0) players.get(0).ownedWithPods.add(zone);
+            if (podsP0 > 0 && ownerId == 0) players.get(0).ownedWithPods.add(zone);
             zone.getPods()[1] = podsP1;
-            if (podsP0>0 && ownerId ==1) players.get(1).ownedWithPods.add(zone);
+            if (podsP1 > 0 && ownerId == 1) players.get(1).ownedWithPods.add(zone);
             zone.getPods()[2] = podsP2;
-            if (podsP0>0 && ownerId ==2) players.get(2).ownedWithPods.add(zone);
+            if (podsP2 > 0 && ownerId == 2) players.get(2).ownedWithPods.add(zone);
             zone.getPods()[3] = podsP3;
-            if (podsP0>0 && ownerId ==3) players.get(3).ownedWithPods.add(zone);
+            if (podsP3 > 0 && ownerId == 3) players.get(3).ownedWithPods.add(zone);
 
             zone.setMoveAblePods(zone.getPods()[myId]);
             zone.setMovedTo(0);
@@ -477,17 +628,18 @@ class World {
             Integer value = 0;
             for (Zone adjacent : zone.getAdjacentZones())
                 value += ((new Double(adjacent.getPlatinum() / 2).intValue()));
-//                value += adjacent.getPlatinum(); // TODO TOUCHY
 
-            zone.setAdjacentPlatinum(value);
+            zone.adjacentPlatinum = value;
         }
 
         // SORTING PLAT  allow for drop on low value + near clusters
         Collections.sort(platinumZones, Zone.rawPlatinumComparator);
 
-        continents = Continent.buildContinents(this);
+        continents = Continent.buildContinents(this); // /!\ this order.
         clusters = Cluster.buildClusters(this);
         players = PlayerInfo.buildPlayer(this);
+        Cluster.buildClustersInfo(this);
+        Continent.buildContinentInfo(this);
         me = players.get(myId);
     }
 
@@ -497,14 +649,6 @@ class World {
 
     public List<Zone> getPlatinumZones() {
         return platinumZones;
-    }
-
-    public Integer getMyId() {
-        return myId;
-    }
-
-    public void setMyId(Integer myId) {
-        this.myId = myId;
     }
 
     public Integer getZoneCount() {
@@ -613,7 +757,7 @@ class Zone {
     private Integer defend = 0; // pods needed to defend zone
     private Integer moveAblePods = 0; // pods available for move
     private Integer movedTo = 0; // number of pods that have moved this zone
-    private Integer adjacentPlatinum = 0;
+    public Integer adjacentPlatinum = 0;
     private Integer ownedAdjacentZones = 0;
 
     public Integer continent = -1;
@@ -635,14 +779,6 @@ class Zone {
 
     public void setOwnedAdjacentZones(Integer ownedAdjacentZones) {
         this.ownedAdjacentZones = ownedAdjacentZones;
-    }
-
-    public Integer getAdjacentPlatinum() {
-        return adjacentPlatinum;
-    }
-
-    public void setAdjacentPlatinum(Integer adjacentPlatinum) {
-        this.adjacentPlatinum = adjacentPlatinum;
     }
 
     public Integer getMoveAblePods() {
@@ -754,40 +890,13 @@ class Zone {
     }
 
 
-    public static List<Zone> getNeutralZones(List<Zone> zones, List<Zone> platZone) {
+    public static List<Zone> getNeutralZones(List<Zone> zones) {
         List<Zone> neutralAdjacentZones = new ArrayList<Zone>();
         for (Zone zone : zones) {
-            if (platZone == null) {
-                if (zone.getOwner() == -1) neutralAdjacentZones.add(zone);
-            } else {
-                if (zone.getOwner() == -1 && !platZone.contains(zone)) neutralAdjacentZones.add(zone);
-            }
+            if (zone.getOwner() == -1) neutralAdjacentZones.add(zone);
         }
         return neutralAdjacentZones;
     }
-
-/*    public static List<Zone> getNotOwnedZones(List<Zone> zones, int myId) {
-        List<Zone> notOwnedZones = new ArrayList<Zone>();
-        for (Zone zone : zones) {
-            if (zone.getOwner() != myId) notOwnedZones.add(zone);
-        }
-        return notOwnedZones;
-    }*/
-
-    public static List<Zone> getOwnedZones(List<Zone> zones, int myId, Boolean secured) {
-        List<Zone> ownedZones = new ArrayList<Zone>();
-        if (secured == null) {
-            for (Zone zone : zones) {
-                if (zone.getOwner() == myId) ownedZones.add(zone);
-            }
-        } else {
-            for (Zone zone : zones) {
-                if (zone.getOwner() == myId && zone.getSecured() == secured) ownedZones.add(zone);
-            }
-        }
-        return ownedZones;
-    }
-
 
     @Override
     public String toString() {
@@ -805,15 +914,6 @@ class Zone {
         @Override
         public int compare(Zone zone1, Zone zone2) {
             return (zone1.getPlatinum() - zone2.getPlatinum()) * -1;
-        }
-    };
-
-
-    public static Comparator<Zone> platinumComparator = new Comparator<Zone>() {
-        @Override
-        public int compare(Zone zone1, Zone zone2) {  // sort lowest to highest if sortOrderForPlat >0
-            return (-zone1.getPlatinum() + zone1.getAdjacentPlatinum() - zone2.getAdjacentPlatinum() + zone2.getPlatinum()) * -1;
-
         }
     };
 }
