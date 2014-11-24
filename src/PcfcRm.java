@@ -111,6 +111,8 @@ class DropManager {
         Collections.sort(world.clusters, Cluster.rawClusterComparator);
         for (Cluster cluster : world.clusters) {
             dropTo.addAll(cluster.high);
+        }
+        for (Cluster cluster : world.clusters) {
             dropTo.addAll(cluster.medium);
         }
         for (Cluster cluster : world.clusters) {
@@ -132,12 +134,22 @@ class DropManager {
     private void first1v2(List<Zone> dropTo) {
         // 1v2 -> drop 2 in medium for biggest clusters take best continent continent
         Collections.sort(world.continents, Continent.rawContinentComparator);
-        Collections.sort(world.continents.get(0).clusters, Cluster.rawClusterComparator);
-        for (Cluster cluster : world.continents.get(0).clusters) {
+//        Collections.sort(world.continents.get(0).clusters, Cluster.rawClusterComparator);
+//        for (Cluster cluster : world.continents.get(0).clusters) {
+//            dropTo.addAll(cluster.medium);
+//            dropTo.addAll(cluster.high);
+//        }
+//        for (Cluster cluster : world.clusters) {
+//            dropTo.addAll(cluster.low);
+//        }
+        Collections.sort(world.continents.get(1).clusters, Cluster.rawClusterComparator);
+        for (Cluster cluster : world.continents.get(1).clusters) {
             dropTo.addAll(cluster.medium);
+        }
+        for (Cluster cluster : world.continents.get(1).clusters) {
             dropTo.addAll(cluster.high);
         }
-        for (Cluster cluster : world.clusters) {
+        for (Cluster cluster : world.continents.get(1).clusters) {
             dropTo.addAll(cluster.low);
         }
 
@@ -238,12 +250,19 @@ class MovementManager {
                 }
             } else {  // THE ZONE IS A BORDER
                 priorities = zone.getAdjacentZones();
-                int maxMoving = Math.max(8,movingPods);
-                int leftOver = movingPods<8?0:movingPods-8;
-                for (int i = 0; i < movingPods; i++) { // for each pod of the zone
+                int maxMoving = Math.max(8, movingPods);
+                int leftOver = movingPods < 8 ? 0 : movingPods - 8;
+//                for (int i = 0; i < movingPods; i++) { // for each pod of the zone
+                for (int i = 0; i < maxMoving; i++) { // for each pod of the zone
                     Collections.sort(priorities, Zone.valueComparator);
                     Movement.addMove(zone, priorities.get(0), moves, world.getUndefended());
-
+                }
+                List<Zone> aggressive = Zone.getEnemyZones(zone.getAdjacentZones());
+                Collections.sort(aggressive, Zone.rawPlatinumComparator);
+                if (!aggressive.isEmpty()) {
+                    for (int i = 0; i < leftOver; i++) { // many pod arounds: switch to aggressive
+                        Movement.addMove(zone, aggressive.get(0), moves, world.getUndefended());
+                    }
                 }
             }
         }
@@ -896,6 +915,14 @@ class Zone {
             if (zone.getOwner() == -1) neutralAdjacentZones.add(zone);
         }
         return neutralAdjacentZones;
+    }
+
+    public static List<Zone> getEnemyZones(List<Zone> zones) {
+        List<Zone> enemyZones = new ArrayList<Zone>();
+        for (Zone zone : zones) {
+            if (zone.getOwner() >= -1 && zone.getOwner() != myId) enemyZones.add(zone);
+        }
+        return enemyZones;
     }
 
     @Override
