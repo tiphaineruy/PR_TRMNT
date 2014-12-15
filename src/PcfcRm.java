@@ -158,7 +158,7 @@ class DropManager {
             Integer zoneToDropIndex = 0;
             while (world.me.maxPods > 0) {
                 world.me.maxPods = Movement.addDrop(dropTo.get(zoneToDropIndex), 2, drops, world.me.maxPods, world.getUndefended());
-                zoneToDropIndex++;
+                zoneToDropIndex++;g
                 if (zoneToDropIndex >= dropTo.size()) zoneToDropIndex = 0;
             }
         }
